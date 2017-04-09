@@ -17,15 +17,22 @@ def get_niftis(subject_id, data_dir):
     return t1s
 
 
-def get_hemis(pial_list):
+def get_rh(pial_list):
     """
     Is there a better way of doing this?
     """
-    out = []
-    for h in ['rh.pial', 'lh.pial']:
-        temp = [p for p in pial_list if p.endswith(h)]
-        out += temp
-    return out
+    for p in pial_list:
+        if p.endswith('rh.pial'):
+            return p
+
+
+def get_lh(pial_list):
+    """
+    Is there a better way of doing this?
+    """
+    for p in pial_list:
+        if p.endswith('lh.pial'):
+            return p
 
 
 def main(dataset, output_dir, sub_ids, work_dir):
@@ -62,12 +69,12 @@ def main(dataset, output_dir, sub_ids, work_dir):
     
     # Combine the two GM surface files into a brain.
     # I assume we want to add something to allow users to combine other labels.
-    # TODO: Create nipype mris_convert --combinesurfs interface
     mris = pe.Node(MRIsCombine(),
                    name='to_stl')
     mris.inputs.out_file = 'brain.stl'  # mris_convert may add rh. or lh. to
                                         # beg of out_file
     
-    wf.connect(reconall, (get_hemis, 'pial'), mris, 'in_files')
+    wf.connect(reconall, (get_lh, 'pial'), mris, 'in_file1')
+    wf.connect(reconall, (get_rh, 'pial'), mris, 'in_file2')
     
-    # Last thing it an output thing.
+    # Datasink maybe?
