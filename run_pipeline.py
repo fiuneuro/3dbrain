@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import nipype.pipeline.engine as pe
 from nipype.interfaces.utility.util import Function, IdentityInterface
-from nipype.interfaces.freesurfer import ReconAll, MRIsCombine
+from nipype.interfaces.freesurfer import ReconAll, MRIsCombine, MRITessellate
 
 
 def get_niftis(subject_id, data_dir):
@@ -67,14 +67,24 @@ def main(dataset, output_dir, sub_ids, work_dir):
     wf.connect(subj_iterable, 'subject_id', reconall, 'subject_id')
     wf.connect(BIDSDataGrabber, 'T1_files', reconall, 'T1_files')
     
-    # Combine the two GM surface files into a brain.
-    # I assume we want to add something to allow users to combine other labels.
-    mris = pe.Node(MRIsCombine(),
-                   name='to_stl')
-    mris.inputs.out_file = 'brain.stl'  # mris_convert may add rh. or lh. to
-                                        # beg of out_file
+    # Tessellate corpus callosum
+    # Not sure if we need pretess
+    tess = pe.Node(MRITessellate(label_value=86))
+    wf.connect(reconall, 'aseg', tess, 'in_file')
     
-    wf.connect(reconall, (get_lh, 'pial'), mris, 'in_file1')
-    wf.connect(reconall, (get_rh, 'pial'), mris, 'in_file2')
+    # Combine the two GM surface files and the corpus callosum into a brain.
+    # I assume we want to add something to allow users to combine other labels.
+    comb1 = pe.Node(MRIsCombine(), name='lh+cc')
+    
+    # TODO: Figure out how to create in_files list from reconall and tess
+    wf.connect(reconall, (get_lh, 'pial'), comb1, 'in_file1')
+    wf.connect(tess, 'out_file', comb1, 'in_file2')
+    
+    # TODO: Figure out how to create in_files list from reconall and mris1
+    comb2 = pe.Node(MRIsCombine(), name='lh+cc+rh')
+    comb2.inputs.out_file = 'brain.stl'  # or something
+    
+    wf.connect(comb1, 'out_file', comb2, 'in_file1')
+    wf.connect(reconall, (get_rh, 'pial'), comb2, 'in_file2')
     
     # Datasink maybe?
