@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import nipype.pipeline.engine as pe
+import nipype.interfaces.io as nio
 from nipype.interfaces.utility.util import Function, IdentityInterface
 from nipype.interfaces.freesurfer import ReconAll, MRIsCombine, MRITessellate
 
@@ -35,6 +36,13 @@ def get_lh(pial_list):
             return p
 
 
+def to_list(f1, f2):
+    """
+    Simple function to format inputs to MRIsCombine
+    """
+    return [f1, f2]
+
+
 def main(dataset, output_dir, sub_ids, work_dir):
     """
     Workflow to create stl file(s) for subject from BIDS dataset.
@@ -42,6 +50,7 @@ def main(dataset, output_dir, sub_ids, work_dir):
     wf = pe.Workflow('3dbrain')
     wf.base_dir = work_dir  # With a BIDS App, this will be somewhere
                             # on the image, so...
+    wf.config['execution']['crashdump_dir'] = work_dir
     
     # Enter subjects into workflow
     subj_iterable = pe.Node(IdentityInterface(fields=['subject_id'],
@@ -69,22 +78,39 @@ def main(dataset, output_dir, sub_ids, work_dir):
     
     # Tessellate corpus callosum
     # Not sure if we need pretess
-    tess = pe.Node(MRITessellate(label_value=86))
-    wf.connect(reconall, 'aseg', tess, 'in_file')
+    tess_cc = pe.Node(MRITessellate(label_value=86),
+                      name='TessellateCorpusCallosum')
+    wf.connect(reconall, 'aseg', tess_cc, 'in_file')
     
     # Combine the two GM surface files and the corpus callosum into a brain.
     # I assume we want to add something to allow users to combine other labels.
+    to_list1 = pe.Node(Function(function=to_list,
+                                input_names=['f1', 'f2'],
+                                output_names=['lst']),
+                       name='ToList1')
+    wf.connect(reconall, (get_lh, 'pial'), to_list1, 'f1')
+    wf.connect(tess_cc, 'out_file', to_list1, 'f2')
+    
     comb1 = pe.Node(MRIsCombine(), name='lh+cc')
+    wf.connect(to_list1, 'lst', comb1, 'in_files')
     
-    # TODO: Figure out how to create in_files list from reconall and tess
-    wf.connect(reconall, (get_lh, 'pial'), comb1, 'in_file1')
-    wf.connect(tess, 'out_file', comb1, 'in_file2')
+    to_list2 = pe.Node(Function(function=to_list,
+                                input_names=['f1', 'f2'],
+                                output_names=['lst']),
+                       name='ToList2')
+    wf.connect(reconall, (get_rh, 'pial'), to_list2, 'f1')
+    wf.connect(comb1, 'out_file', to_list2, 'f2')
     
-    # TODO: Figure out how to create in_files list from reconall and mris1
     comb2 = pe.Node(MRIsCombine(), name='lh+cc+rh')
-    comb2.inputs.out_file = 'brain.stl'  # or something
+    #comb2.inputs.out_file = 'brain.stl'  # or something
     
-    wf.connect(comb1, 'out_file', comb2, 'in_file1')
-    wf.connect(reconall, (get_rh, 'pial'), comb2, 'in_file2')
+    wf.connect(to_list2, 'lst', comb2, 'in_files')
     
-    # Datasink maybe?
+    # Save the relevant data into an output directory
+    datasink = pe.Node(nio.DataSink(), name='datasink')
+    datasink.inputs.base_directory = output_dir
+    wf.connect(comb2, 'out_file', datasink, 'model')
+    
+    
+    # Run things
+    wf.run(plugin='LSF', plugin_args={'bsub_args': '-q PQ_nbc'})
