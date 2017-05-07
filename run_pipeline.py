@@ -2,7 +2,7 @@
 import nipype.pipeline.engine as pe
 import nipype.interfaces.io as nio
 from nipype.interfaces.utility.util import Function, IdentityInterface
-from nipype.interfaces.freesurfer import ReconAll, MRIsCombine, MRITessellate
+from nipype.interfaces.freesurfer import ReconAll, MRIsCombine, MRIsConvert
 
 
 def get_niftis(subject_id, data_dir):
@@ -76,41 +76,31 @@ def main(dataset, output_dir, sub_ids, work_dir):
     wf.connect(subj_iterable, 'subject_id', reconall, 'subject_id')
     wf.connect(BIDSDataGrabber, 'T1_files', reconall, 'T1_files')
     
-    # Tessellate corpus callosum
-    # Not sure if we need pretess
-    tess_cc = pe.Node(MRITessellate(label_value=86),
-                      name='TessellateCorpusCallosum')
-    wf.connect(reconall, 'aseg', tess_cc, 'in_file')
+    # Convert each pial file to stl format.
+    conv_rh = pe.Node(MRIsConvert(), name='conv_rh')
+    wf.connect(reconall, (get_rh, 'pial'), conv_rh, 'in_file')
     
-    # Combine the two GM surface files and the corpus callosum into a brain.
+    conv_lh = pe.Node(MRIsConvert(), name='conv_lh')
+    wf.connect(reconall, (get_lh, 'pial'), conv_lh, 'in_file')
+    
+    # Combine the two GM surface files into a brain.
     # I assume we want to add something to allow users to combine other labels.
-    to_list1 = pe.Node(Function(function=to_list,
-                                input_names=['f1', 'f2'],
-                                output_names=['lst']),
-                       name='ToList1')
-    wf.connect(reconall, (get_lh, 'pial'), to_list1, 'f1')
-    wf.connect(tess_cc, 'out_file', to_list1, 'f2')
+    tolist = pe.Node(Function(function=to_list,
+                               input_names=['f1', 'f2'],
+                               output_names=['lst']),
+                       name='ToList')
+    wf.connect(reconall, (get_lh, 'pial'), tolist, 'f1')
+    wf.connect(reconall, (get_rh, 'pial'), tolist, 'f2')
     
-    comb1 = pe.Node(MRIsCombine(), name='lh+cc')
-    wf.connect(to_list1, 'lst', comb1, 'in_files')
-    
-    to_list2 = pe.Node(Function(function=to_list,
-                                input_names=['f1', 'f2'],
-                                output_names=['lst']),
-                       name='ToList2')
-    wf.connect(reconall, (get_rh, 'pial'), to_list2, 'f1')
-    wf.connect(comb1, 'out_file', to_list2, 'f2')
-    
-    comb2 = pe.Node(MRIsCombine(), name='lh+cc+rh')
-    #comb2.inputs.out_file = 'brain.stl'  # or something
-    
-    wf.connect(to_list2, 'lst', comb2, 'in_files')
+    comb = pe.Node(MRIsCombine(), name='rh+lh')
+    wf.connect(tolist, 'lst', comb, 'in_files')
     
     # Save the relevant data into an output directory
     datasink = pe.Node(nio.DataSink(), name='datasink')
     datasink.inputs.base_directory = output_dir
-    wf.connect(comb2, 'out_file', datasink, 'model')
-    
+    wf.connect(conv_rh, 'out_file', datasink, 'rh_stl')
+    wf.connect(conv_lh, 'out_file', datasink, 'lh_stl')
+    wf.connect(comb, 'out_file', datasink, 'full_stl')
     
     # Run things
     wf.run(plugin='LSF', plugin_args={'bsub_args': '-q PQ_nbc'})
